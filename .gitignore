@@ -1,0 +1,12 @@
+# Build artifacts (Make)
+*.o
+*.db
+epiphany_search
+
+# Build artifacts (Bazel)
+bazel-*
+
+# OS & Editors
+.DS_Store
+.vscode/
+.idea/
