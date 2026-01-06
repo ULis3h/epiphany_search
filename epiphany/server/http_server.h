@@ -1,5 +1,6 @@
 #pragma once
 #include "epiphany/database/database.h"
+#include "epiphany/qrs/qrs.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -9,7 +10,7 @@ namespace server {
 
 class HttpServer {
 public:
-  HttpServer(int port, std::shared_ptr<epiphany::database::Database> db);
+  HttpServer(int port, std::shared_ptr<epiphany::database::Database> db, const std::string &web_root);
   void Start();
 
 private:
@@ -19,7 +20,8 @@ private:
   std::string ReadFile(const std::string &path);
 
   int port_;
-  std::shared_ptr<epiphany::database::Database> db_;
+  std::shared_ptr<epiphany::qrs::QRS> qrs_;
+  std::string web_root_;
 };
 
 } // namespace server

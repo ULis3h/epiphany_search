@@ -4,16 +4,20 @@
 #include <iostream>
 #include <netinet/in.h>
 #include <sstream>
+#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
+#include <chrono>
+#include "epiphany/observability/metrics.h"
 
 namespace epiphany {
 namespace server {
 
 HttpServer::HttpServer(int port,
-                       std::shared_ptr<epiphany::database::Database> db)
-    : port_(port), db_(db) {}
+                       std::shared_ptr<epiphany::database::Database> db,
+                       const std::string &web_root)
+    : port_(port), qrs_(std::make_shared<epiphany::qrs::QRS>(db)), web_root_(web_root) {}
 
 void HttpServer::Start() {
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -55,8 +59,19 @@ void HttpServer::HandleClient(int client_socket) {
   char buffer[1024] = {0};
   read(client_socket, buffer, 1024);
   std::string request(buffer);
+  {
+    std::istringstream li(request);
+    std::string m, p;
+    li >> m >> p;
+    std::cout << "[req] " << m << " " << p << std::endl;
+  }
 
-  std::string response = ProcessRequest(request);
+  auto t0 = std::chrono::steady_clock::now();
+  auto response = ProcessRequest(request);
+  auto t1 = std::chrono::steady_clock::now();
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+  epiphany::observability::Metrics::RecordRequest();
+  epiphany::observability::Metrics::RecordLatency(ms);
   send(client_socket, response.c_str(), response.size(), 0);
 }
 
@@ -66,37 +81,129 @@ std::string HttpServer::ProcessRequest(const std::string &request) {
   iss >> method >> path >> protocol;
 
   if (method != "GET") {
-    return "HTTP/1.1 405 Method Not Allowed\r\n\r\n";
+    epiphany::observability::Metrics::errors.fetch_add(1);
+    return "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\n\r\n{\"error\":\"method not allowed\"}";
   }
 
   if (path == "/") {
     path = "/index.html";
   }
 
-  if (path.find("/api/search") == 0) {
-    // Simple query params parsing
-    size_t query_pos = path.find("q=");
-    if (query_pos != std::string::npos) {
-      std::string query = path.substr(query_pos + 2);
-      // Decoding basics (replace %20 with space)
-      size_t pos;
-      while ((pos = query.find("%20")) != std::string::npos) {
-        query.replace(pos, 3, " ");
-      }
-      std::string json = db_->Search(query);
-      return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + json;
-    }
-    return "HTTP/1.1 400 Bad Request\r\n\r\n";
+  if (path == "/health") {
+    epiphany::observability::Metrics::health.fetch_add(1);
+    return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\"}";
   }
 
-  // Static files
-  std::string content = ReadFile("epiphany/web" + path);
+  if (path.find("/metrics") == 0) {
+    std::string json = epiphany::observability::Metrics::ToJson();
+    return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + json;
+  }
+
+  if (path.find("/api/search_v2") == 0) {
+    epiphany::observability::Metrics::api_search_v2.fetch_add(1);
+    size_t qm = path.find('?');
+    std::string qs = (qm != std::string::npos) ? path.substr(qm + 1) : "";
+    auto decode = [](const std::string &in) {
+      std::string out;
+      out.reserve(in.size());
+      for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+          char hex[3] = {in[i + 1], in[i + 2], 0};
+          int v = std::strtol(hex, nullptr, 16);
+          out.push_back(static_cast<char>(v));
+          i += 2;
+        } else if (in[i] == '+') {
+          out.push_back(' ');
+        } else {
+          out.push_back(in[i]);
+        }
+      }
+      return out;
+    };
+    std::string q, limit_s, offset_s;
+    std::istringstream qss(qs);
+    std::string kv;
+    while (std::getline(qss, kv, '&')) {
+      size_t eq = kv.find('=');
+      if (eq == std::string::npos) continue;
+      std::string k = kv.substr(0, eq);
+      std::string v = decode(kv.substr(eq + 1));
+      if (k == "q") q = v;
+      else if (k == "limit") limit_s = v;
+      else if (k == "offset") offset_s = v;
+    }
+    if (q.empty()) {
+      return "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{\"error\":\"missing q\"}";
+    }
+    int limit = 10, offset = 0;
+    try {
+      if (!limit_s.empty()) limit = std::stoi(limit_s);
+      if (!offset_s.empty()) offset = std::stoi(offset_s);
+    } catch (...) {
+      return "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{\"error\":\"invalid limit or offset\"}";
+    }
+    std::string json = qrs_->SearchV2(q, limit, offset);
+    return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + json;
+  }
+
+  if (path.find("/api/search") == 0) {
+    epiphany::observability::Metrics::api_search.fetch_add(1);
+    size_t qm = path.find('?');
+    std::string qs = (qm != std::string::npos) ? path.substr(qm + 1) : "";
+    auto decode = [](const std::string &in) {
+      std::string out;
+      out.reserve(in.size());
+      for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+          char hex[3] = {in[i + 1], in[i + 2], 0};
+          int v = std::strtol(hex, nullptr, 16);
+          out.push_back(static_cast<char>(v));
+          i += 2;
+        } else if (in[i] == '+') {
+          out.push_back(' ');
+        } else {
+          out.push_back(in[i]);
+        }
+      }
+      return out;
+    };
+    std::string q, limit_s, offset_s;
+    std::istringstream qss(qs);
+    std::string kv;
+    while (std::getline(qss, kv, '&')) {
+      size_t eq = kv.find('=');
+      if (eq == std::string::npos) continue;
+      std::string k = kv.substr(0, eq);
+      std::string v = decode(kv.substr(eq + 1));
+      if (k == "q") q = v;
+      else if (k == "limit") limit_s = v;
+      else if (k == "offset") offset_s = v;
+    }
+    if (q.empty()) {
+      return "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{\"error\":\"missing q\"}";
+    }
+    int limit = 10, offset = 0;
+    try {
+      if (!limit_s.empty()) limit = std::stoi(limit_s);
+      if (!offset_s.empty()) offset = std::stoi(offset_s);
+    } catch (...) {
+      return "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{\"error\":\"invalid limit or offset\"}";
+    }
+    std::string json = qrs_->Search(q, limit, offset);
+    return "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + json;
+  }
+
+  if (path.find("..") != std::string::npos) {
+    epiphany::observability::Metrics::errors.fetch_add(1);
+    return "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{\"error\":\"invalid path\"}";
+  }
+  std::string content = ReadFile(web_root_ + path);
   if (!content.empty()) {
     return "HTTP/1.1 200 OK\r\nContent-Type: " + GetMimeType(path) +
            "\r\n\r\n" + content;
   }
 
-  return "HTTP/1.1 404 Not Found\r\n\r\nNot Found";
+  return "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":\"not found\"}";
 }
 
 std::string HttpServer::ReadFile(const std::string &path) {

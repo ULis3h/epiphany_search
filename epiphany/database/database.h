@@ -14,7 +14,8 @@ public:
   virtual bool Execute(const std::string &query) = 0;
 
   // Search for items/products.
-  virtual std::string Search(const std::string &query) = 0;
+  virtual std::string Search(const std::string &query, int limit, int offset) = 0;
+  virtual int Count(const std::string &query) = 0;
 
   // Factory method to create a database instance.
   // connection_string example: "sqlite:test.db"

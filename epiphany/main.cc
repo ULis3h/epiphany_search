@@ -1,10 +1,15 @@
 #include "epiphany/database/database.h"
 #include "epiphany/server/http_server.h"
 #include <iostream>
+#include <cstdlib>
+#include <string>
 
 int main(int argc, char *argv[]) {
-  // Default to "sqlite:epiphany.db" if no arg provided
   std::string conn_str = (argc > 1) ? argv[1] : "sqlite:epiphany.db";
+  const char *env_db = std::getenv("EP_DB");
+  if (env_db && std::string(env_db).size() > 0) {
+    conn_str = std::string(env_db);
+  }
   std::cout << "Using database: " << conn_str << std::endl;
 
   auto db = epiphany::database::Database::Create(conn_str);
@@ -45,7 +50,19 @@ int main(int argc, char *argv[]) {
               "62907403E502bd664/1d00c363914757e2.jpg' WHERE NOT EXISTS "
               "(SELECT 1 FROM items WHERE title='Sony WH-1000XM5');");
 
-  epiphany::server::HttpServer server(8080, std::move(db));
+  int port = 8080;
+  const char *env_port = std::getenv("EP_PORT");
+  if (env_port) {
+    try {
+      port = std::stoi(env_port);
+    } catch (...) {}
+  }
+  std::string web_root = "epiphany/web";
+  const char *env_web = std::getenv("EP_WEB_ROOT");
+  if (env_web && std::string(env_web).size() > 0) {
+    web_root = std::string(env_web);
+  }
+  epiphany::server::HttpServer server(port, std::move(db), web_root);
   server.Start();
 
   return 0;
