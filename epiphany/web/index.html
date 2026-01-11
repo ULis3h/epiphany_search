@@ -20,6 +20,7 @@
 
     <div class="container">
         <div class="section-title">Featured Products</div>
+        <div id="latency-display" style="font-size: 0.9em; color: #666; margin-bottom: 10px;"></div>
         <div id="results" class="grid">
             <div class="placeholder">Type something above to start searching...</div>
         </div>
@@ -35,7 +36,14 @@
 
             try {
                 const res = await fetch(`/api/search?q=${query}`);
-                const items = await res.json();
+                const data = await res.json();
+                const items = data.items;
+
+                // Update latency display
+                const latencyDiv = document.getElementById('latency-display');
+                if (latencyDiv) {
+                    latencyDiv.innerText = `Search completed in ${data.latency_ms} ms`;
+                }
 
                 if (items.length === 0) {
                     document.getElementById('results').innerHTML = '<div class="placeholder">No products found.</div>';
