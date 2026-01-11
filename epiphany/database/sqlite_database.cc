@@ -31,6 +31,19 @@ public:
     return true;
   }
 
+  bool Execute(const std::string &query, const std::vector<std::string> &params) override {
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, query.c_str(), -1, &stmt, 0) != SQLITE_OK) {
+      return false;
+    }
+    for (int i = 0; i < static_cast<int>(params.size()); ++i) {
+      sqlite3_bind_text(stmt, i + 1, params[i].c_str(), -1, SQLITE_TRANSIENT);
+    }
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE;
+  }
+
   std::string Search(const std::string &query, int limit, int offset) override {
     auto escape_json = [](const std::string &s) {
       std::string out;
@@ -108,6 +121,24 @@ public:
     }
     sqlite3_finalize(stmt);
     return total;
+  }
+
+  PriceAggregates PriceStats(const std::string &query) override {
+    const char *sql = "SELECT AVG(price), MIN(price), MAX(price) FROM items WHERE title LIKE ?;";
+    sqlite3_stmt *stmt = nullptr;
+    PriceAggregates agg{};
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, 0) != SQLITE_OK) {
+      return agg;
+    }
+    std::string like = "%" + query + "%";
+    sqlite3_bind_text(stmt, 1, like.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      agg.avg = sqlite3_column_double(stmt, 0);
+      agg.min = sqlite3_column_double(stmt, 1);
+      agg.max = sqlite3_column_double(stmt, 2);
+    }
+    sqlite3_finalize(stmt);
+    return agg;
   }
 
 private:

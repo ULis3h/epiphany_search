@@ -19,12 +19,19 @@ public:
     auto result = searcher_->Search(q, limit, offset);
     auto t1 = std::chrono::steady_clock::now();
     auto search_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    auto t2 = std::chrono::steady_clock::now();
+    auto aggs = searcher_->ComputeAggregates(q);
+    auto t3 = std::chrono::steady_clock::now();
+    auto aggregate_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
     std::ostringstream oss;
     oss << "{\"trace_id\":\"" << GenerateTraceId() << "\",\"limit\":" << limit
         << ",\"offset\":" << offset << ",\"total\":" << result.second
-        << ",\"elapsed_ms\":" << search_ms
+        << ",\"elapsed_ms\":" << (search_ms + aggregate_ms)
         << ",\"parse_ms\":0,\"route_ms\":0,\"search_ms\":" << search_ms
-        << ",\"aggregate_ms\":0,\"items\":" << result.first << "}";
+        << ",\"aggregate_ms\":" << aggregate_ms
+        << ",\"aggregates\":{\"price\":{\"avg\":" << aggs.avg
+        << ",\"min\":" << aggs.min << ",\"max\":" << aggs.max << "}}"
+        << ",\"items\":" << result.first << "}";
     return oss.str();
   }
 private:

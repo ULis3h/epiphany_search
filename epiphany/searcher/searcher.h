@@ -13,6 +13,9 @@ public:
     std::string items = db_->Search(q, limit, offset);
     return {items, total};
   }
+  epiphany::database::Database::PriceAggregates ComputeAggregates(const std::string &q) {
+    return db_->PriceStats(q);
+  }
 private:
   std::shared_ptr<epiphany::database::Database> db_;
 };
