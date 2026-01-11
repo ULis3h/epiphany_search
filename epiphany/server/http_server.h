@@ -10,12 +10,15 @@ namespace server {
 
 class HttpServer {
 public:
-  HttpServer(int port, std::shared_ptr<epiphany::database::Database> db, const std::string &web_root);
+  HttpServer(int port, std::shared_ptr<epiphany::database::Database> db,
+             const std::string &web_root);
   void Start();
 
 private:
-  void HandleClient(int client_socket);
-  std::string ProcessRequest(const std::string &request);
+  void HandleClient(int client_socket, const std::string &client_ip,
+                    int client_port);
+  std::string ProcessRequest(const std::string &request,
+                             const std::string &client_ip, int client_port);
   std::string GetMimeType(const std::string &path);
   std::string ReadFile(const std::string &path);
 

@@ -5,6 +5,7 @@ epiphany_search
 
 # Build artifacts (Bazel)
 bazel-*
+MODULE.bazel.lock
 
 # OS & Editors
 .DS_Store
